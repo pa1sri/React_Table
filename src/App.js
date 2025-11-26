@@ -13,7 +13,9 @@ function App() {
                 <Route path="/home" component={Home} />
         </Switch>
       </Router>
+      
     </div>
+    //this code is commented
   );
 }
 
