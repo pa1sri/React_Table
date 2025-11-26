@@ -1,22 +1,39 @@
-name: AI PR Review
-
+name: AI PR Review (Serverless Lambda)
 on:
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, synchronize, reopened]
 
 jobs:
-  pr-review:
+  collect-and-invoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Generate Diff
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - name: Get PR diff
+        id: prdiff
         run: |
-          gh pr diff ${{ github.event.pull_request.number }} > pr-diff.json
-
-      - name: Invoke Lambda (No AWS Credentials Needed)
+          git fetch origin ${{ github.event.pull_request.base.ref }}
+          git diff --unified=3 origin/${{ github.event.pull_request.base.ref }}...HEAD > pr.diff || true
+          # limit size to 200 KB to avoid sending huge payloads
+          truncate -s 200000 pr.diff || true
+          echo "::set-output name=diff::$(base64 -w 0 pr.diff || true)"
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }} # OR use aws-access keys below
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Invoke Lambda
+        env:
+          LAMBDA_FUNCTION_NAME: ${{ secrets.LAMBDA_FUNCTION_NAME }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
         run: |
-          aws lambda invoke             --function-name AIPrReviewBasicLambda             --region ${{ secrets.AWS_REGION }}             --payload file://pr-diff.json             output.json
-
-      - name: Show Lambda Output
-        run: cat output.json
+          PAYLOAD=$(jq -n --arg owner "${{ github.repository_owner }}" --arg repo "${{ github.event.repository.name }}" --arg pr "${{ github.event.number }}" --arg diff "$(echo '${{ steps.prdiff.outputs.diff }}' | base64 -d)" --arg token "${GITHUB_TOKEN}" '{owner:$owner, repo:$repo, pr_number:$pr|tonumber, diff:$diff, github_token:$token}')
+          echo "Invoking Lambda with payload size:" $(echo "$PAYLOAD" | wc -c)
+          aws lambda invoke --function-name "$LAMBDA_FUNCTION_NAME" --payload "$PAYLOAD" response.json --region ${AWS_REGION}
+          cat response.json
