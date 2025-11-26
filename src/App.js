@@ -5,6 +5,8 @@ import Login from './Components/login';
 import Home from './Components/Home';
 
 function App() {
+  //Its an appfile
+  
   return (
     <div className="App">
       <Router>
